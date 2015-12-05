@@ -54,9 +54,9 @@ vector<int> histogram(10);
 
 string int2string(int number) 
 {
-    stringstream ss;//create a stringstream
-    ss << number;//add number to the stream
-    return ss.str();//return a string with the contents of the stream
+    stringstream ss;
+    ss << number;
+    return ss.str();
 }
 
 struct stat_struct
@@ -120,8 +120,6 @@ void *event_handler_thread(void* arguments)
     int select_result = 0;
     string reply      = "";
     bool done         = false;
-    sigaddset(&sig_set, SIGALRM);
-    pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
 
     /* Initialize list of file descriptors to monitor */
     for(int i = 0; i < args->request_channels.size(); i++)
@@ -150,8 +148,6 @@ void *event_handler_thread(void* arguments)
             fd2id_list[args->request_channels[i]->read_fd()] = atoi(&current_request.at(current_request.length()-1));
         }
     }
-    sigdelset(&sig_set, SIGALRM); 
-    pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
 
     
     /* Start infinite event handler loop */
@@ -160,11 +156,7 @@ void *event_handler_thread(void* arguments)
         read_fds = temp;
         
         /* Temporarily disable SIGALRM handling */
-        sigaddset(&sig_set, SIGALRM);
-        pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
         select_result = select(max_read + 1, &read_fds, NULL, NULL, NULL);
-        sigdelset(&sig_set, SIGALRM); 
-        pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
         
         for(int i = 0; i < args->request_channels.size(); i++)
         {
@@ -172,11 +164,7 @@ void *event_handler_thread(void* arguments)
             {
                 /* If data is available on the channel, read from it */
                 results_read++;
-                sigaddset(&sig_set, SIGALRM);                   //temporarily suspend SIGALRM handling
-                pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
                 reply = args->request_channels[i]->cread();
-                sigdelset(&sig_set, SIGALRM);                   //enable SIGALRM handling
-                pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
 
                 /* Identify which response buffer the reply should be sent to */
                 personID = fd2id_list[args->request_channels[i]->read_fd()];
@@ -201,12 +189,7 @@ void *event_handler_thread(void* arguments)
                     requests_sent++;
                     string current_request = args->request_buffer->request_from_buffer();
                     
-                    /* Temporarily suspend SIGALRM handling, write request to channel */
-                    sigaddset(&sig_set, SIGALRM);
-                    pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
                     args->request_channels[i]->cwrite(current_request);
-                    sigdelset(&sig_set, SIGALRM);
-                    pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
                     
                     fd2id_list[args->request_channels[i]->read_fd()] = atoi(&current_request.at(current_request.length()-1));
                 }
@@ -215,13 +198,7 @@ void *event_handler_thread(void* arguments)
             {
                 for(int i = 0; i < args->request_channels.size(); i++)
                 {
-                    /* Temporarily suspend SIGALRM handling, write to channel */
-                    sigaddset(&sig_set, SIGALRM);
-                    pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
                     args->request_channels[i]->cwrite("quit");
-                    sigdelset(&sig_set, SIGALRM);
-                    pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
-                    usleep(10000);
                 }
                 pthread_exit(NULL);
             }
@@ -232,9 +209,6 @@ void *event_handler_thread(void* arguments)
 /* Each person has a thread which pushes queries to the request buffer */
 void *request_thread_func(void* arguments)
 {
-    sigset_t sig_set;
-    req_struct* args = (req_struct*) arguments;
-    
     /* Generate request string, send it to buffer specified number of times */
     string request = "data " + int2string(args->personID);
     for(int i=0; i<args->num_requests; i++)
@@ -248,13 +222,8 @@ void *request_thread_func(void* arguments)
 /* Each person has a statistics thread which collects data from the response buffers and generates a histogram */
 void *statistics_thread(void* arguments)
 {
-    sigset_t sig_set;
-    stat_struct* args = (stat_struct*) arguments;
-
     while(true)
     {
-        sigaddset(&sig_set, SIGALRM);
-        pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
         /* Thread is finished when worker threads finish & response buffer is empty */
         if(*args->responses_complete == true)
         {
@@ -272,35 +241,9 @@ void *statistics_thread(void* arguments)
             /* Create histogram of data */
             args->histogram->at(int_response/10) = args->histogram->at(int_response/10) + 1;
         }
-        sigdelset(&sig_set, SIGALRM);
-        pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
     }
 }
 
-void signal_print(int arg)
-{
-    //Appropriate method to clear screen?
-    system("clear");
-    
-    /* Display histogram of data */
-    for(int i=0; i<10; i++)
-    {
-        cout << i << "0-" << i << "9: " << histogram[i] << endl;
-    }
-    
-    /* Track number of successful queries */
-    int ct = 0;
-    for(int i=0; i<10; i++)
-    {
-        ct+=histogram[i];
-    }
-    printf("Total data count: %8d\n", ct);
-}
-
-void signal_interrupt(int arg)
-{
-    return;
-}
 
 /*--------------------------------------------------------------------------*/
 /* MAIN FUNCTION */
@@ -385,19 +328,6 @@ int main(int argc, char * argv[]) {
             RequestChannel *nc = new RequestChannel(channel_name, RequestChannel::CLIENT_SIDE);
             reqchannels.push_back(nc);
         }
-            
-        /* Initialize timer(signal) handler and the timer */
-        struct sigaction sa;
-        sa.sa_handler = &signal_print;
-		sigaction(SIGALRM, &sa, NULL);
-		struct itimerval timer;
-		timer.it_value.tv_sec = 0;
-		timer.it_value.tv_usec = 10;
-		timer.it_interval.tv_sec = 1;
-		timer.it_interval.tv_usec = 0;
-		setitimer(ITIMER_REAL, &timer, NULL);
-		
-		signal(EINTR, signal_interrupt);
         
         /* Generate request and response buffers as well as arg_structs */
         boundedbuffer bounded_buffer(buffer_size);
