@@ -30,6 +30,7 @@
 #include <vector>
 #include <pthread.h>
 #include <map>
+#include <netdb.h>
 
 #include <errno.h>
 #include <unistd.h>
@@ -209,6 +210,8 @@ void *event_handler_thread(void* arguments)
 /* Each person has a thread which pushes queries to the request buffer */
 void *request_thread_func(void* arguments)
 {
+	req_struct* args = (req_struct*) arguments;
+	
     /* Generate request string, send it to buffer specified number of times */
     string request = "data " + int2string(args->personID);
     for(int i=0; i<args->num_requests; i++)
@@ -222,6 +225,8 @@ void *request_thread_func(void* arguments)
 /* Each person has a statistics thread which collects data from the response buffers and generates a histogram */
 void *statistics_thread(void* arguments)
 {
+	   stat_struct* args = (stat_struct*) arguments;
+	
     while(true)
     {
         /* Thread is finished when worker threads finish & response buffer is empty */
@@ -252,23 +257,27 @@ void *statistics_thread(void* arguments)
 int main(int argc, char * argv[]) {
     
     /* Variable Declarations */
-    int option_char;
     int requests_pperson = 100000; 
+	int option_char;
     int buffer_size = 10000;
     int num_reqchan = 30;
+	string port = "4995";
+	string server_name = "compute";
     bool *responses_complete = new bool(false);
     bool *handler_done = new bool(false);
     
     timeval start_time, end_time;
 
     /* Argparse for command line options lives here */
-    while(( option_char = getopt(argc, argv, "n:b:w:") ) != EOF)
+    while(( option_char = getopt(argc, argv, "n:b:w:h:p:") ) != EOF)
     {
     	switch(option_char)
     	{
     	    case 'n': requests_pperson = atoi(optarg); break;
     		case 'b': buffer_size = atoi(optarg); break;
     		case 'w': num_reqchan = atoi(optarg); break;
+			case 'h': server_name = optarg; break;
+			case 'p': port = optarg; break;
     		case ':': cout << "Unknown option!\n"; return 1;
     	}
     }
@@ -314,13 +323,76 @@ int main(int argc, char * argv[]) {
         }
         num_reqchan = new_reqchan;
     }
+	
+    if(port == "" || port.find("-") != -1)
+    {
+    	string new_port = 0;
+    	cout << "ERROR: Must enter a valid port number" << endl
+    	     << "Please enter a new port: ";
+        while (!(cin >> new_port) || (new_port == "" || new_port.find("-") != -1))
+        {   
+            cout << "Bad input - try again: ";
+            cin.clear();
+            cin.ignore(INT_MAX, '\n');
+        }
+        port = new_port;
+		
+    }
+	
+	char* s_name = new char[server_name.length() + 1];
+	strcpy(s_name, server_name.c_str());
+	char* p = new char[port.length() + 1];
+	strcpy(p, port.c_str());
+	
+	struct addrinfo hints, *res;
+	int sockfd;
 
+	// first, load up address structs with getaddrinfo():
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	int status;
+	//getaddrinfo("www.example.com", "3490", &hints, &res);
+	if ((status = getaddrinfo(s_name, p, &hints, &res)) != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
+        return -1;
+    }
+
+	// make a socket:
+	sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	if (sockfd < 0)
+	{
+		perror ("Error creating socket\n");	
+		return -1;
+	}
+
+	// connect!
+	if (connect(sockfd, res->ai_addr, res->ai_addrlen)<0)
+	{
+		perror ("connect error\n");
+		return -1;
+	}
+	printf ("Successfully connected to the server %s\n", s_name);
+	printf ("Now Attempting to send a message to the server\n", s_name);
+	char buf [1024];
+	sprintf (buf, "hello");
+	send (sockfd, buf, strlen (buf)+1, 0);
+	recv (sockfd, buf, 1024, 0);
+	printf ("Received %s from the server\n", buf);
+	return 0;
+	
+	
+	
+	
+	
+/*
     int pid = fork();
     if(pid == 0)
     {
         RequestChannel chan("control", RequestChannel::CLIENT_SIDE);
         
-        /* Create new reqchannels sequentially */
+         Create new reqchannels sequentially 
         vector<RequestChannel*> reqchannels; 
         for(int i=0; i<num_reqchan; i++)
         {
@@ -329,7 +401,7 @@ int main(int argc, char * argv[]) {
             reqchannels.push_back(nc);
         }
         
-        /* Generate request and response buffers as well as arg_structs */
+        /* Generate request and response buffers as well as arg_structs 
         boundedbuffer bounded_buffer(buffer_size);
         vector<boundedbuffer> response_buffers;
         vector<req_struct>    request_structures;
@@ -348,53 +420,46 @@ int main(int argc, char * argv[]) {
             stat_structures.push_back(ss);
         }
       
-        /* Start the worker threads */
+        /* Start the worker threads 
         pthread_t event_handler_id;
         pthread_create(&event_handler_id, NULL, event_handler_thread, &handler_structure);
     
-        /* Create three request threads */
+        /* Create three request threads 
         pthread_t request_threads[3];
         for(int i=0; i<3; i++)
         {
             pthread_create(&request_threads[i], NULL, request_thread_func, &request_structures[i]);
         }
 
-        /* Create three statistic threads */
+        /* Create three statistic threads 
         pthread_t stat_threads[3];
         for(int i=0; i<3; i++)
         {
             pthread_create(&stat_threads[i], NULL, statistics_thread, &stat_structures[i]);
         }
         
-        /* Wait for the request threads to complete */
+        /* Wait for the request threads to complete 
         for(int i=0; i<3; i++)
         {
             pthread_join(request_threads[i], NULL);
         }
 
-        /* Wait for the event handler to complete */
+        /* Wait for the event handler to complete 
         pthread_join(event_handler_id, NULL);
         *responses_complete = true;
 
 
-        /* Wait for the statistics threads to complete */
+        /* Wait for the statistics threads to complete 
         for(int i=0; i<3; i++)
         {
             pthread_join(stat_threads[i], NULL);
         }
         
-        /* Quit the master request channel */
+        /* Quit the master request channel 
         chan.send_request("quit");
-        
-        /* Print the final values */
-        signal_print(0);
         
         return 0;
     }
-    else
-    {
-        execl("dataserver", "", (char *)0);
-    }
-
-  usleep(1000000);
+*/
+	
 }

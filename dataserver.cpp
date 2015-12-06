@@ -19,11 +19,14 @@
 #include <iostream>
 #include <sys/types.h>
 #include <sys/stat.h>
-
+#include <netdb.h>
+#include <string.h>
 #include <pthread.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <climits>
+#include <vector>
 
 #include "reqchannel.h"
 
@@ -61,7 +64,7 @@ void * handle_data_requests(void * args) {
 
   // -- Handle client requests on this channel. 
   
-  handle_process_loop(*data_channel);
+  //handle_process_loop(*data_channel);
 
   // -- Client has quit. We remove channel.
  
@@ -130,15 +133,89 @@ void process_request(RequestChannel & _channel, const string & _request) {
 
 }
 
-void handle_process_loop(RequestChannel & _channel) {
+int handle_process_loop(char* p, int b) 
+{
+	/* First initialize network interface */
+	
+	int backlog = b;
+	int sockfd;
+	vector<int> connection_fds;
+	fd_set active_fds, temp;
+	FD_ZERO(&active_fds);
+	FD_ZERO(&temp);
+	
+    struct addrinfo hints, *serv;
+    struct sockaddr_storage their_addr;
+    socklen_t sin_size;
+    char s[INET6_ADDRSTRLEN];
+    int rv;
 
-  for(;;) {
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+	
 
-//    cout << "Reading next request from channel (" << _channel.name() << ") ..." << flush;
-    string request = _channel.cread();
-//    cout << " done (" << _channel.name() << ")." << endl;
-//    cout << "New request is " << request << endl;
+	/* Get information about server's local address info */
+    if ((rv = getaddrinfo(NULL, p, &hints, &serv)) != 0) 
+	{
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return -1;
+    }
+	
+	/* Allocate a socket for the server */
+	if ((sockfd = socket(serv->ai_family, serv->ai_socktype, serv->ai_protocol)) == -1) 
+	{
+        perror("server: socket");
+		return -1;
+    }
+	
+	/* Associate socket with a port on this machine */
+    if (bind(sockfd, serv->ai_addr, serv->ai_addrlen) == -1) 
+	{
+		close(sockfd);
+		perror("server: bind");
+		return -1;
+	}
+	
+    freeaddrinfo(serv); 
 
+    if (listen(sockfd, backlog) == -1) {
+        perror("listen");
+        exit(1);
+    }
+	
+	printf("server: waiting for connections...\n");
+	char buf [1024];
+	while(true) 
+	{  
+        sin_size = sizeof their_addr;
+        int new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+        if (new_fd == -1) 
+		{
+            perror("accept");
+            continue;
+        }
+        printf("server: got connection\n");
+		recv (new_fd, buf, sizeof (buf), 0);
+		printf("server: received msg: %s\n", buf);
+
+		
+		
+		
+		// send
+		string message = "Hello to you";
+		char* msg = new char[message.length() + 1];
+		strcpy(msg, message.c_str());
+		
+        if (send(new_fd, msg, strlen(msg)+1, 0) == -1)
+		{
+            perror("send");
+        }
+		close(new_fd);
+    }
+
+/*
     if (request.compare("quit") == 0) {
       _channel.cwrite("bye");
       usleep(10000);          // give the other end a bit of time.
@@ -146,7 +223,7 @@ void handle_process_loop(RequestChannel & _channel) {
     }
 
     process_request(_channel, request);
-  }
+  } */
   
 }
 
@@ -154,12 +231,56 @@ void handle_process_loop(RequestChannel & _channel) {
 /* MAIN FUNCTION */
 /*--------------------------------------------------------------------------*/
 
-int main(int argc, char * argv[]) {
-
-  //  cout << "Establishing control channel... " << flush;
-  RequestChannel control_channel("control", RequestChannel::SERVER_SIDE);
-  //  cout << "done.\n" << flush;
-
-  handle_process_loop(control_channel);
-
+int main(int argc, char * argv[]) 
+{	
+	string port = "4995";
+	int backlog = 20;
+	int option_char;
+	
+    /* Argparse for command line options lives here */
+    while(( option_char = getopt(argc, argv, "p:b:") ) != EOF)
+    {
+    	switch(option_char)
+    	{
+    	    case 'p': port = optarg; break;
+    		case 'b': backlog = atoi(optarg); break;
+    		case ':': cout << "Unknown option!\n"; return 1;
+    	}
+    }
+	
+    /* Check input arguments for validity */
+    if(port == "" || port.find("-") != -1)
+    {
+    	string new_port = 0;
+    	cout << "ERROR: Must enter a valid port number" << endl
+    	     << "Please enter a new port: ";
+        while (!(cin >> new_port) || (new_port == "" || new_port.find("-") != -1))
+        {   
+            cout << "Bad input - try again: ";
+            cin.clear();
+            cin.ignore(INT_MAX, '\n');
+        }
+        port = new_port;
+		
+    }
+    if(backlog <= 0)
+    {
+    	int new_backlog = 0;
+    	cout << "ERROR: Backlog must be positive!" << endl
+    	     << "Please enter a new backlog: ";
+    	while (!(cin >> new_backlog) || (new_backlog <= 0))
+        {
+            cout << "Bad input - try again: ";
+            cin.clear();
+            cin.ignore(INT_MAX, '\n');
+        }
+        backlog = new_backlog;
+    }
+	
+	/* Call main handler loop */
+	char* temp = new char[port.length() + 1];
+	strcpy(temp, port.c_str());
+	handle_process_loop(temp, backlog);
+	
+	return 0;
 }
